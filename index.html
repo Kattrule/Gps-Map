@@ -77,8 +77,16 @@
         .history { padding: 15px; overflow-y: auto; flex-grow: 1; background: #0a0a1a; min-height: 50px; }
         .history-item { background: var(--panel); padding: 12px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid var(--indigo); }
         
-        .view-btn { background: var(--indigo); color: white; margin-top: 8px; width: 100%; padding: 5px; font-size: 0.7rem; border-radius: 4px; }
-        .delete-btn { background: #333; color: #f93111; margin-top: 5px; width: 100%; padding: 3px; font-size: 0.6rem; border-radius: 4px; }
+        /* Nya klasser för historik-knapparna */
+        .action-row { display: flex; gap: 5px; margin-top: 10px; flex-wrap: wrap; }
+        .action-btn { flex: 1; margin: 0; padding: 6px 2px; font-size: 0.65rem; border-radius: 4px; min-width: 22%; text-align: center; }
+        
+        .view-btn { background: var(--indigo); color: white; }
+        .edit-btn { background: var(--cyan); color: black; }
+        .exp-single-btn { background: var(--green); color: black; }
+        .delete-btn { background: #333; color: #f93111; }
+        
+        .io-btn { background: var(--dark-purple); color: white; padding: 6px 10px; font-size: 0.65rem; min-width: auto; margin-left: 5px; }
 
         .km-marker { background: var(--purple); border: 2px solid white; border-radius: 50%; color: black; font-weight: bold; text-align: center; font-size: 11px; line-height: 20px; }
     </style>
@@ -119,7 +127,15 @@
     <div id="resizer"></div>
 
     <div class="history">
-        <h3 style="color: var(--indigo); font-size: 0.9rem; margin: 0 0 10px 0;">HISTORIK</h3>
+        <input type="file" id="importFile" style="display: none;" accept=".json" onchange="importTrips(event)">
+        
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="color: var(--indigo); font-size: 0.9rem; margin: 0;">HISTORIK</h3>
+            <div style="display: flex;">
+                <button class="io-btn" onclick="document.getElementById('importFile').click()">Importera</button>
+                <button class="io-btn" onclick="exportTrips()">Exportera Alla</button>
+            </div>
+        </div>
         <div id="historyList"></div>
     </div>
 
@@ -128,12 +144,10 @@
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('./sw.js')
-                .then(reg => console.log('Service Worker registrerad för GPS-Map!', reg.scope))
                 .catch(err => console.error('Service Worker fel:', err));
             });
         }
 
-        // --- ORIGINAL KOD BÖRJAR HÄR ---
         let map, polyline, marker, historyLayer;
         let watchId = null, timerInterval = null, isPaused = false;
         let startTime = null, pausedTimeTotal = 0, pauseStartedAt = null;
@@ -233,7 +247,19 @@
             if (pathCoords.length < 2) return alert("Ingen rutt!");
             const mode = document.getElementById('timeMode').value;
             const factor = (mode === 'chms') ? (4320 / 1000) : 3.6;
-            const trip = { id: Date.now(), date: new Date().toLocaleString(), dist: (totalDistance / 1000).toFixed(2), max: Math.round(maxSpeedMs * factor), time: document.getElementById('timer').innerText, unit: (mode === 'chms') ? "km/ch" : "km/h", route: pathCoords };
+            
+            const dateStr = new Date().toLocaleString();
+            const trip = { 
+                id: Date.now(), 
+                name: "Resa " + new Date().toLocaleDateString(), // Standardnamn
+                date: dateStr, 
+                dist: (totalDistance / 1000).toFixed(2), 
+                max: Math.round(maxSpeedMs * factor), 
+                time: document.getElementById('timer').innerText, 
+                unit: (mode === 'chms') ? "km/ch" : "km/h", 
+                route: pathCoords 
+            };
+            
             let trips = JSON.parse(localStorage.getItem('indigo_trips_v7') || '[]');
             trips.unshift(trip);
             localStorage.setItem('indigo_trips_v7', JSON.stringify(trips));
@@ -244,7 +270,64 @@
         function loadHistory() {
             const list = document.getElementById('historyList');
             let trips = JSON.parse(localStorage.getItem('indigo_trips_v7') || '[]');
-            list.innerHTML = trips.map(t => `<div class="history-item"><strong>${t.date}</strong><br>Sträcka: ${t.dist} km | Max: ${t.max} ${t.unit}<br>Tid: ${t.time}<button class="view-btn" onclick="viewRoute(${t.id})">VISA RUTT</button><button class="delete-btn" onclick="deleteTrip(${t.id})">Radera</button></div>`).join('');
+            if (trips.length === 0) {
+                list.innerHTML = '<p style="color:#6272a4; font-size: 0.8rem;">Inga sparade resor ännu.</p>';
+                return;
+            }
+            
+            list.innerHTML = trips.map(t => {
+                // Säkerställ att gamla resor utan namn får ett visningsnamn (datumet)
+                const displayName = t.name || t.date;
+                return `
+                <div class="history-item">
+                    <strong style="color: var(--cyan); font-size: 1.1rem; display: block; margin-bottom: 2px;">${displayName}</strong>
+                    <span style="font-size: 0.75rem; color: #6272a4;">${t.date}</span><br>
+                    Sträcka: ${t.dist} km | Max: ${t.max} ${t.unit}<br>
+                    Tid: ${t.time}
+                    
+                    <div class="action-row">
+                        <button class="action-btn view-btn" onclick="viewRoute(${t.id})">VISA</button>
+                        <button class="action-btn edit-btn" onclick="renameTrip(${t.id})">BYT NAMN</button>
+                        <button class="action-btn exp-single-btn" onclick="exportSingleTrip(${t.id})">EXPORTERA</button>
+                        <button class="action-btn delete-btn" onclick="deleteTrip(${t.id})">RADERA</button>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        // --- NAMN & INDIVIDUELL EXPORT ---
+        function renameTrip(id) {
+            let trips = JSON.parse(localStorage.getItem('indigo_trips_v7') || '[]');
+            const trip = trips.find(t => t.id === id);
+            if (trip) {
+                const newName = prompt("Ange nytt namn för resan:", trip.name || trip.date);
+                if (newName !== null && newName.trim() !== "") {
+                    trip.name = newName.trim();
+                    localStorage.setItem('indigo_trips_v7', JSON.stringify(trips));
+                    loadHistory();
+                }
+            }
+        }
+
+        function exportSingleTrip(id) {
+            let trips = JSON.parse(localStorage.getItem('indigo_trips_v7') || '[]');
+            const trip = trips.find(t => t.id === id);
+            if (trip) {
+                // Vi lägger resan i en array för att den ska gå att importera med din vanliga import-knapp
+                const blob = new Blob([JSON.stringify([trip])], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                
+                // Gör om namnet till ett datorvänligt filnamn (tar bort mellanslag och konstiga tecken)
+                let safeName = (trip.name || trip.date).replace(/[^a-z0-9]/gi, '_').toLowerCase();
+                a.download = `resa_${safeName}.json`;
+                
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
         }
 
         function viewRoute(id) {
@@ -264,6 +347,53 @@
                 localStorage.setItem('indigo_trips_v7', JSON.stringify(trips));
                 loadHistory();
             }
+        }
+
+        // --- EXPORT ALLA / IMPORT LOGIK ---
+        function exportTrips() {
+            const trips = localStorage.getItem('indigo_trips_v7') || '[]';
+            if (trips === '[]' || JSON.parse(trips).length === 0) return alert("Du har inga resor att exportera.");
+            
+            const blob = new Blob([trips], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const dateStr = new Date().toISOString().slice(0, 10);
+            a.download = `alla_resor_${dateStr}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function importTrips(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const importedTrips = JSON.parse(e.target.result);
+                    if (!Array.isArray(importedTrips)) throw new Error("Fel format");
+
+                    let currentTrips = JSON.parse(localStorage.getItem('indigo_trips_v7') || '[]');
+                    
+                    const combined = [...importedTrips, ...currentTrips];
+                    const uniqueTripsMap = new Map();
+                    combined.forEach(trip => uniqueTripsMap.set(trip.id, trip));
+                    
+                    const uniqueTrips = Array.from(uniqueTripsMap.values());
+                    uniqueTrips.sort((a, b) => b.id - a.id);
+
+                    localStorage.setItem('indigo_trips_v7', JSON.stringify(uniqueTrips));
+                    loadHistory();
+                    alert(`Import lyckades! ${importedTrips.length} resor laddades in.`);
+                } catch (error) {
+                    alert("Kunde inte läsa filen. Är du säker på att det är en res-fil från denna app?");
+                }
+                event.target.value = '';
+            };
+            reader.readAsText(file);
         }
 
         function togglePause() {
